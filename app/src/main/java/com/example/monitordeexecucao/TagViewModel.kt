@@ -4,19 +4,28 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.max
 
 class TagViewModel : ViewModel() {
     var isConnected by mutableStateOf(false)
     var isCalibrating by mutableStateOf(false)
-    var normalizedPosition by mutableStateOf(0.0f) // Vai de 0.0 a 1.0
+    var isCountingDown by mutableStateOf(false)
+    var normalizedPosition by mutableStateOf(0.0f)
     var dominantAxisName by mutableStateOf("Aguardando Calibração...")
 
-    private var minAngles = floatArrayOf(1000f, 1000f, 1000f) // Roll, Pitch, Yaw
+    private var minAngles = floatArrayOf(1000f, 1000f, 1000f)
     private var maxAngles = floatArrayOf(-1000f, -1000f, -1000f)
+    private var lastAngles = floatArrayOf(0f, 0f, 0f) // Salva a última posição conhecida
+
     private var activeAxisIndex: Int? = null
+    private var isInverted: Boolean = false // Define se o movimento precisa ser espelhado
 
     fun toggleCalibration() {
+        if (isCountingDown) return // Bloqueia cliques duplos durante a contagem
+
         if (isCalibrating) {
             // FIM DA CALIBRAÇÃO: Descobrir qual eixo moveu mais
             isCalibrating = false
@@ -32,30 +41,45 @@ class TagViewModel : ViewModel() {
                 }
             }
             activeAxisIndex = chosenIndex
-            dominantAxisName = "Eixo: ${axisNames[chosenIndex]} (Delta: ${maxDelta.toInt()}°)"
+
+            // LÓGICA DE INVERSÃO: Verifica onde a TAG parou no final da calibração
+            val minVal = minAngles[chosenIndex]
+            val maxVal = maxAngles[chosenIndex]
+            val currentVal = lastAngles[chosenIndex]
+
+            // Se o repouso atual está mais próximo do Max do que do Min, invertemos a tela
+            isInverted = (maxVal - currentVal) < (currentVal - minVal)
+
+            dominantAxisName = "Eixo: ${axisNames[chosenIndex]} (Invertido: $isInverted)"
+
         } else {
-            // INÍCIO DA CALIBRAÇÃO
-            minAngles = floatArrayOf(1000f, 1000f, 1000f)
-            maxAngles = floatArrayOf(-1000f, -1000f, -1000f)
-            activeAxisIndex = null
-            normalizedPosition = 0.0f
-            dominantAxisName = "Calibrando (Faça o movimento)..."
-            isCalibrating = true
+            // INÍCIO DA CALIBRAÇÃO COM CONTAGEM REGRESSIVA
+            viewModelScope.launch {
+                isCountingDown = true
+                for (i in 3 downTo 1) {
+                    dominantAxisName = "Prepare-se: $i..."
+                    delay(1000)
+                }
+                isCountingDown = false
+
+                minAngles = floatArrayOf(1000f, 1000f, 1000f)
+                maxAngles = floatArrayOf(-1000f, -1000f, -1000f)
+                activeAxisIndex = null
+                normalizedPosition = 0.0f
+                dominantAxisName = "Calibrando (Faça 1 repetição)..."
+                isCalibrating = true
+            }
         }
     }
 
-    // Função chamada toda vez que o Bluetooth recebe uma nova linha (ex: "0.1, 0.2, ...")
     fun processIncomingData(csvData: String) {
         val values = csvData.split(",")
-        // Verifica se recebemos os 10 valores do Projeto LTM
         if (values.size == 10) {
             try {
-                // Índices 7, 8 e 9 correspondem a Roll, Pitch e Yaw
                 val currentAngles = floatArrayOf(
-                    values[7].toFloat(),
-                    values[8].toFloat(),
-                    values[9].toFloat()
+                    values[7].toFloat(), values[8].toFloat(), values[9].toFloat()
                 )
+                lastAngles = currentAngles
 
                 if (isCalibrating) {
                     for (i in 0..2) {
@@ -69,15 +93,16 @@ class TagViewModel : ViewModel() {
                         val currentVal = currentAngles[activeIdx]
 
                         if (maxVal - minVal > 0.1f) {
-                            val rawNorm = (currentVal - minVal) / (maxVal - minVal)
-                            // Trava o valor entre 0 e 1 para a bolinha não sair da tela
+                            var rawNorm = (currentVal - minVal) / (maxVal - minVal)
+
+                            // Aplica a inversão dinâmica detectada na calibração
+                            if (isInverted) rawNorm = 1.0f - rawNorm
+
                             normalizedPosition = max(0.0f, kotlin.math.min(1.0f, rawNorm))
                         }
                     }
                 }
-            } catch (e: Exception) {
-                // Ignora pacotes corrompidos durante a transmissão pelo ar
-            }
+            } catch (e: Exception) { }
         }
     }
 }
