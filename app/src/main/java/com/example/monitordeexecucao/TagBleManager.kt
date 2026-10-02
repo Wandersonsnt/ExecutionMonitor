@@ -21,28 +21,38 @@ class TagBleManager(private val context: Context, private val viewModel: TagView
 
     fun startScan() {
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return
+        viewModel.scannedDevices.clear()
         bluetoothAdapter.bluetoothLeScanner?.startScan(scanCallback)
     }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
-            // Procura especificamente pela nossa TAG
-            if (device.name == "LTM_Tag") {
-                bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
-                bluetoothGatt = device.connectGatt(context, false, gattCallback)
+            val deviceName = device.name ?: "Desconhecido"
+
+            // Filtra para exibir apenas TAGs do nosso projeto
+            if (deviceName.contains("LTM")) {
+                viewModel.addScannedDevice(deviceName, device.address)
             }
         }
+    }
+
+    // NOVA FUNÇÃO: Conecta manualmente ao endereço MAC selecionado no menu
+    fun connectToAddress(address: String) {
+        bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        val device = bluetoothAdapter?.getRemoteDevice(address)
+        bluetoothGatt = device?.connectGatt(context, false, gattCallback)
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                // CORREÇÃO DO DELAY: Força o Android a transferir dados em alta velocidade
+                gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
                 viewModel.isConnected = true
                 gatt.discoverServices() // Acorda a TAG para listar os serviços
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 viewModel.isConnected = false
-                startScan() // Tenta reconectar automaticamente
             }
         }
 

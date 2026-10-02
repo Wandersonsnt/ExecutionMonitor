@@ -1,9 +1,12 @@
-package com.example.monitordeexecucao // Mantenha o seu pacote!
+package com.example.monitordeexecucao
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -24,11 +27,11 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 @Composable
-fun MainScreen(viewModel: TagViewModel) {
-    // A bolinha só reage ao movimento se o modo Tracking (Gamificação) estiver ativo
+fun MainScreen(viewModel: TagViewModel, bleManager: TagBleManager) {
     val animatedY by animateFloatAsState(
         targetValue = if (viewModel.isTracking) viewModel.normalizedPosition else 0f,
-        animationSpec = tween(durationMillis = 80)
+        animationSpec = tween(durationMillis = 100, easing = LinearEasing),
+        label = "ballPosition"
     )
 
     val isExercising = viewModel.exerciseState != ExerciseState.IDLE
@@ -38,13 +41,61 @@ fun MainScreen(viewModel: TagViewModel) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        Text(
-            text = if (viewModel.isConnected) "Conectado" else "Aguardando TAG...",
-            color = if (viewModel.isConnected) Color(0xFF00C853) else Color.Red,
-            style = MaterialTheme.typography.titleLarge
-        )
 
-        // Contador de Repetições
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (viewModel.isConnected) "Conectado" else "Desconectado",
+                color = if (viewModel.isConnected) Color(0xFF00C853) else Color.Red,
+                style = MaterialTheme.typography.titleLarge
+            )
+
+            Button(onClick = {
+                bleManager.startScan()
+                viewModel.showDeviceDialog = true
+            }) {
+                Text(if (viewModel.isConnected) "Trocar TAG" else "Buscar TAG")
+            }
+        }
+
+        if (viewModel.showDeviceDialog) {
+            AlertDialog(
+                onDismissRequest = { viewModel.showDeviceDialog = false },
+                title = { Text("Tags Encontradas") },
+                text = {
+                    if (viewModel.scannedDevices.isEmpty()) {
+                        Text("Buscando...", modifier = Modifier.padding(16.dp))
+                    } else {
+                        LazyColumn {
+                            items(viewModel.scannedDevices) { device ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            bleManager.connectToAddress(device.address)
+                                            viewModel.showDeviceDialog = false
+                                        }
+                                        .padding(16.dp)
+                                ) {
+                                    Text(device.name, fontWeight = FontWeight.Bold)
+                                    Text(device.address, fontSize = 12.sp, color = Color.Gray)
+                                }
+                                Divider()
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.showDeviceDialog = false }) {
+                        Text("Cancelar")
+                    }
+                }
+            )
+        }
+
         if (isExercising) {
             Text(
                 text = "REPS: ${viewModel.repCount}",
@@ -58,11 +109,11 @@ fun MainScreen(viewModel: TagViewModel) {
 
         Text(text = viewModel.dominantAxisName, color = Color.Gray)
 
-        // TELA DO JOGO
-        Box(
+        // Substituição do Box fixo por um BoxWithConstraints dinâmico com proporção de peso
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(350.dp)
+                .weight(1f) // Força o quadro a ocupar apenas o espaço que sobrar livre na tela
                 .clip(RoundedCornerShape(15.dp))
                 .background(Color(0xFF2C3E50)),
             contentAlignment = Alignment.CenterStart
@@ -70,14 +121,15 @@ fun MainScreen(viewModel: TagViewModel) {
 
             // A onda só surge após a 1ª repetição invisível
             if (viewModel.isTracking) {
-                val infiniteTransition = rememberInfiniteTransition()
+                val infiniteTransition = rememberInfiniteTransition(label = "waveTransition")
                 val wavePhase by infiniteTransition.animateFloat(
                     initialValue = 0f,
                     targetValue = (2f * PI).toFloat(),
                     animationSpec = infiniteRepeatable(
                         animation = tween(viewModel.waveDurationMillis, easing = LinearEasing),
                         repeatMode = RepeatMode.Restart
-                    )
+                    ),
+                    label = "wavePhase"
                 )
 
                 Canvas(modifier = Modifier.fillMaxSize()) {
@@ -106,7 +158,8 @@ fun MainScreen(viewModel: TagViewModel) {
 
             // A Bolinha do Usuário
             val ballSize = 40.dp
-            val usableHeight = 350f - 40f
+            // O cálculo da bolinha agora consulta dinamicamente a altura livre (maxHeight) que o Android entregou
+            val usableHeight = maxHeight.value - 40f
             val yOffset = ((1f - animatedY) * usableHeight) - (usableHeight / 2f)
 
             Box(
@@ -117,14 +170,15 @@ fun MainScreen(viewModel: TagViewModel) {
             )
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        // O 'Spacer(weight=1f)' foi apagado daqui, pois o BoxWithConstraints acima já faz esse trabalho
 
         Button(
             onClick = { viewModel.toggleExercise() },
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (isExercising) Color.Red else Color(0xFF2980B9)
             ),
-            modifier = Modifier.fillMaxWidth().height(60.dp)
+            modifier = Modifier.fillMaxWidth().height(60.dp),
+            enabled = viewModel.isConnected
         ) {
             Text(
                 text = if (isExercising) "Finalizar Treino" else "Iniciar Treino",

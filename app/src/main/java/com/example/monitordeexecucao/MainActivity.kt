@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(viewModel = tagViewModel)
+                    MainScreen(viewModel = tagViewModel, bleManager = bleManager)
                 }
             }
         }

@@ -5,6 +5,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import kotlin.math.max
+import androidx.compose.runtime.mutableStateListOf
+
+data class BleDevice(val name: String, val address: String)
 
 enum class ExerciseState {
     IDLE, ADVANCING_REP1, RETURNING_REP1, TRACKING
@@ -13,6 +16,8 @@ enum class ExerciseState {
 class TagViewModel : ViewModel() {
     var isConnected by mutableStateOf(false)
     var exerciseState by mutableStateOf(ExerciseState.IDLE)
+    var showDeviceDialog by mutableStateOf(false)
+    val scannedDevices = mutableStateListOf<BleDevice>()
 
     // Controla a exibição da onda e da bolinha
     var isTracking by mutableStateOf(false)
@@ -39,6 +44,13 @@ class TagViewModel : ViewModel() {
 
     // Histerese: 8 graus de recuo confirmam que o usuário mudou a direção do peso
     private val REVERSAL_THRESHOLD = 8.0f
+
+    fun addScannedDevice(name: String, address: String) {
+        // Evita duplicatas na lista caso o celular escaneie a mesma placa várias vezes
+        if (scannedDevices.none { it.address == address }) {
+            scannedDevices.add(BleDevice(name, address))
+        }
+    }
 
     fun toggleExercise() {
         if (exerciseState == ExerciseState.IDLE) {
