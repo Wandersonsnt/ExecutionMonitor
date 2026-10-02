@@ -1,4 +1,4 @@
-package com.example.monitordeexecucao
+package com.example.monitordeexecucao // Mantenha o seu pacote!
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
@@ -17,16 +17,21 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.PI
 import kotlin.math.sin
 
 @Composable
 fun MainScreen(viewModel: TagViewModel) {
+    // A bolinha só reage ao movimento se o modo Tracking (Gamificação) estiver ativo
     val animatedY by animateFloatAsState(
-        targetValue = viewModel.normalizedPosition,
+        targetValue = if (viewModel.isTracking) viewModel.normalizedPosition else 0f,
         animationSpec = tween(durationMillis = 80)
     )
+
+    val isExercising = viewModel.exerciseState != ExerciseState.IDLE
 
     Column(
         modifier = Modifier.fillMaxSize().padding(20.dp),
@@ -39,6 +44,18 @@ fun MainScreen(viewModel: TagViewModel) {
             style = MaterialTheme.typography.titleLarge
         )
 
+        // Contador de Repetições
+        if (isExercising) {
+            Text(
+                text = "REPS: ${viewModel.repCount}",
+                fontSize = 48.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF2980B9)
+            )
+        } else {
+            Spacer(modifier = Modifier.height(56.dp))
+        }
+
         Text(text = viewModel.dominantAxisName, color = Color.Gray)
 
         // TELA DO JOGO
@@ -46,19 +63,18 @@ fun MainScreen(viewModel: TagViewModel) {
             modifier = Modifier
                 .fillMaxWidth()
                 .height(350.dp)
-                .clip(RoundedCornerShape(15.dp)) // CORREÇÃO 3: Corta as "rebarbas" da onda para fora da caixa
+                .clip(RoundedCornerShape(15.dp))
                 .background(Color(0xFF2C3E50)),
             contentAlignment = Alignment.CenterStart
         ) {
 
-            // CORREÇÃO 2: A onda só será desenhada e animada se estiver no estado de Tracking
+            // A onda só surge após a 1ª repetição invisível
             if (viewModel.isTracking) {
                 val infiniteTransition = rememberInfiniteTransition()
                 val wavePhase by infiniteTransition.animateFloat(
                     initialValue = 0f,
                     targetValue = (2f * PI).toFloat(),
                     animationSpec = infiniteRepeatable(
-                        // CORREÇÃO 5: Injeta dinamicamente a velocidade capturada pelo ViewModel
                         animation = tween(viewModel.waveDurationMillis, easing = LinearEasing),
                         repeatMode = RepeatMode.Restart
                     )
@@ -74,9 +90,8 @@ fun MainScreen(viewModel: TagViewModel) {
                     val path = Path()
                     for (x in 0..w.toInt() step 5) {
                         val normalizedX = x / w
-                        // CORREÇÃO 4: O sinal POSITIVO (+ wavePhase) faz a onda se deslocar da direita para a esquerda
                         val angle = (normalizedX * 2 * PI * frequency) + wavePhase
-                        val y = centerY - (sin(angle).toFloat() * amplitude)
+                        val y = centerY + (sin(angle).toFloat() * amplitude)
 
                         if (x == 0) path.moveTo(x.toFloat(), y) else path.lineTo(x.toFloat(), y)
                     }
@@ -89,7 +104,7 @@ fun MainScreen(viewModel: TagViewModel) {
                 }
             }
 
-            // A Bolinha do Usuário (Sempre visível para acompanhamento instantâneo)
+            // A Bolinha do Usuário
             val ballSize = 40.dp
             val usableHeight = 350f - 40f
             val yOffset = ((1f - animatedY) * usableHeight) - (usableHeight / 2f)
@@ -98,26 +113,21 @@ fun MainScreen(viewModel: TagViewModel) {
                 modifier = Modifier
                     .offset(x = 40.dp, y = yOffset.dp)
                     .size(ballSize)
-                    .background(Color(0xFFF1C40F), CircleShape)
+                    .background(if (viewModel.isTracking) Color(0xFFF1C40F) else Color.Gray, CircleShape)
             )
         }
 
         Spacer(modifier = Modifier.weight(1f))
 
         Button(
-            onClick = { viewModel.toggleCalibration() },
+            onClick = { viewModel.toggleExercise() },
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (viewModel.isCalibrating) Color.Red
-                else if (viewModel.isCountingDown) Color.Gray
-                else Color(0xFF2980B9)
+                containerColor = if (isExercising) Color.Red else Color(0xFF2980B9)
             ),
-            modifier = Modifier.fillMaxWidth().height(60.dp),
-            enabled = !viewModel.isCountingDown
+            modifier = Modifier.fillMaxWidth().height(60.dp)
         ) {
             Text(
-                text = if (viewModel.isCalibrating) "Finalizar Calibração"
-                else if (viewModel.isCountingDown) "Aguarde..."
-                else "Iniciar Calibração",
+                text = if (isExercising) "Finalizar Treino" else "Iniciar Treino",
                 style = MaterialTheme.typography.titleMedium
             )
         }

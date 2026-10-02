@@ -1,125 +1,165 @@
-package com.example.monitordeexecucao
+package com.example.monitordeexecucao // Mantenha o seu pacote!
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlin.math.max
+
+enum class ExerciseState {
+    IDLE, ADVANCING_REP1, RETURNING_REP1, TRACKING
+}
 
 class TagViewModel : ViewModel() {
     var isConnected by mutableStateOf(false)
-    var isCalibrating by mutableStateOf(false)
-    var isCountingDown by mutableStateOf(false)
+    var exerciseState by mutableStateOf(ExerciseState.IDLE)
 
-    // CORREÇÃO 2: Controla quando a onda senoidal aparece
+    // Controla a exibição da onda e da bolinha
     var isTracking by mutableStateOf(false)
-
-    // CORREÇÃO 5: Guarda o tempo da repetição para ditar a velocidade do jogo
     var waveDurationMillis by mutableStateOf(4000)
 
     var normalizedPosition by mutableStateOf(0.0f)
-    var dominantAxisName by mutableStateOf("Aguardando Calibração...")
+    var dominantAxisName by mutableStateOf("Aguardando início...")
+    var repCount by mutableStateOf(0)
 
     private var minAngles = floatArrayOf(1000f, 1000f, 1000f)
     private var maxAngles = floatArrayOf(-1000f, -1000f, -1000f)
     private var lastAngles = floatArrayOf(0f, 0f, 0f)
+    private var startAngles = floatArrayOf(0f, 0f, 0f)
+    private var peakAngles = floatArrayOf(0f, 0f, 0f)
 
-    // Rastreadores de tempo (em milissegundos) para cada extremo
-    private var minTime = longArrayOf(0, 0, 0)
-    private var maxTime = longArrayOf(0, 0, 0)
+    // Rastreadores de amplitude para detectar reversão
+    private var maxDistanceFromStart = 0f
+    private var maxDistanceFromPeak = 0f
+    private var returnStartTime = 0L
 
     private var activeAxisIndex: Int? = null
     private var isInverted: Boolean = false
+    private var isAtPeak = false
 
-    fun toggleCalibration() {
-        if (isCountingDown) return
+    // Histerese: 8 graus de recuo confirmam que o usuário mudou a direção do peso
+    private val REVERSAL_THRESHOLD = 8.0f
 
-        if (isCalibrating) {
-            // FIM DA CALIBRAÇÃO
-            isCalibrating = false
-            var maxDelta = 0.0f
-            var chosenIndex = 0
-            val axisNames = arrayOf("Roll", "Pitch", "Yaw")
-
-            for (i in 0..2) {
-                val delta = maxAngles[i] - minAngles[i]
-                if (delta > maxDelta) {
-                    maxDelta = delta
-                    chosenIndex = i
-                }
-            }
-            activeAxisIndex = chosenIndex
-
-            val minVal = minAngles[chosenIndex]
-            val maxVal = maxAngles[chosenIndex]
-            val currentVal = lastAngles[chosenIndex]
-            isInverted = (maxVal - currentVal) < (currentVal - minVal)
-
-            // CORREÇÃO 5: Calcula o tempo gasto entre o pico mínimo e máximo
-            val timeDiff = kotlin.math.abs(maxTime[chosenIndex] - minTime[chosenIndex])
-            // O tempo do ciclo da onda é o dobro do tempo da meia-repetição (limitado entre 1s e 10s por segurança)
-            waveDurationMillis = (timeDiff * 2).toInt().coerceIn(1000, 10000)
-
-            // CORREÇÃO 1: Contagem regressiva AQUI, após finalizar a calibração
-            viewModelScope.launch {
-                isCountingDown = true
-                for (i in 3 downTo 1) {
-                    dominantAxisName = "Prepare-se: $i..."
-                    delay(1000)
-                }
-                isCountingDown = false
-                isTracking = true // Dispara o aparecimento da onda animada
-                dominantAxisName = "Eixo: ${axisNames[chosenIndex]} | Ritmo: ${waveDurationMillis / 1000.0}s"
-            }
-
-        } else {
-            // INÍCIO DA CALIBRAÇÃO
+    fun toggleExercise() {
+        if (exerciseState == ExerciseState.IDLE) {
+            // INÍCIO DO TREINO (Calibração Oculta)
+            exerciseState = ExerciseState.ADVANCING_REP1
             minAngles = floatArrayOf(1000f, 1000f, 1000f)
             maxAngles = floatArrayOf(-1000f, -1000f, -1000f)
-            minTime = longArrayOf(0, 0, 0)
-            maxTime = longArrayOf(0, 0, 0)
+            startAngles = lastAngles.copyOf()
+            maxDistanceFromStart = 0f
+            maxDistanceFromPeak = 0f
             activeAxisIndex = null
             normalizedPosition = 0.0f
-            isTracking = false // Esconde a onda enquanto calibra
-            dominantAxisName = "Calibrando (Faça 1 repetição com calma)..."
-            isCalibrating = true
+            isTracking = false
+            repCount = 0
+            isAtPeak = false
+            dominantAxisName = "Faça a 1ª repetição (Avanço)..."
+        } else {
+            // FIM DO TREINO
+            exerciseState = ExerciseState.IDLE
+            isTracking = false
+            dominantAxisName = "Treino Finalizado. Repetições: $repCount"
         }
     }
 
     fun processIncomingData(csvData: String) {
         val values = csvData.split(",")
-        // Recebe os 10 valores do Projeto LTM[cite: 2]
+        // Valida se o pacote contém Posição + Quatérnio + Euler[cite: 2]
         if (values.size == 10) {
             try {
-                val currentAngles = floatArrayOf(values[7].toFloat(), values[8].toFloat(), values[9].toFloat())
+                val currentAngles = floatArrayOf(
+                    values[7].toFloat(), values[8].toFloat(), values[9].toFloat()
+                )
                 lastAngles = currentAngles
 
-                if (isCalibrating) {
-                    val now = System.currentTimeMillis()
+                if (exerciseState == ExerciseState.IDLE) return
+
+                // 1. Atualiza os limites de amplitude o tempo todo
+                for (i in 0..2) {
+                    if (currentAngles[i] < minAngles[i]) minAngles[i] = currentAngles[i]
+                    if (currentAngles[i] > maxAngles[i]) maxAngles[i] = currentAngles[i]
+                }
+
+                // 2. Elege o eixo ativamente logo no início do movimento
+                if (activeAxisIndex == null) {
+                    var maxDelta = 0.0f
+                    var chosenIndex = -1
                     for (i in 0..2) {
-                        if (currentAngles[i] < minAngles[i]) {
-                            minAngles[i] = currentAngles[i]
-                            minTime[i] = now // Registra o instante do vale
-                        }
-                        if (currentAngles[i] > maxAngles[i]) {
-                            maxAngles[i] = currentAngles[i]
-                            maxTime[i] = now // Registra o instante do pico
+                        val delta = maxAngles[i] - minAngles[i]
+                        if (delta > maxDelta) {
+                            maxDelta = delta
+                            chosenIndex = i
                         }
                     }
-                } else {
-                    activeAxisIndex?.let { activeIdx ->
-                        val minVal = minAngles[activeIdx]
-                        val maxVal = maxAngles[activeIdx]
-                        val currentVal = currentAngles[activeIdx]
+                    // Trava o eixo assim que um deslocamento considerável (15º) é detectado
+                    if (chosenIndex != -1 && maxDelta > 15.0f) {
+                        activeAxisIndex = chosenIndex
+                    }
+                }
 
-                        if (maxVal - minVal > 0.1f) {
-                            var rawNorm = (currentVal - minVal) / (maxVal - minVal)
-                            if (isInverted) rawNorm = 1.0f - rawNorm
-                            normalizedPosition = max(0.0f, kotlin.math.min(1.0f, rawNorm))
+                activeAxisIndex?.let { activeIdx ->
+                    val currentVal = currentAngles[activeIdx]
+
+                    when (exerciseState) {
+                        ExerciseState.ADVANCING_REP1 -> {
+                            val startVal = startAngles[activeIdx]
+                            val dist = kotlin.math.abs(currentVal - startVal)
+
+                            if (dist > maxDistanceFromStart) {
+                                maxDistanceFromStart = dist
+                                peakAngles = currentAngles.copyOf()
+                            } else if (maxDistanceFromStart > 15.0f && dist < maxDistanceFromStart - REVERSAL_THRESHOLD) {
+                                // DETECÇÃO: Chegou na extensão máxima do exercício e começou a voltar
+                                exerciseState = ExerciseState.RETURNING_REP1
+                                returnStartTime = System.currentTimeMillis()
+                                maxDistanceFromPeak = 0f
+                                dominantAxisName = "Retornando (Termine a repetição)..."
+
+                                // Lógica de inversão automática
+                                isInverted = startAngles[activeIdx] > peakAngles[activeIdx]
+                            }
                         }
+                        ExerciseState.RETURNING_REP1 -> {
+                            val peakVal = peakAngles[activeIdx]
+                            val dist = kotlin.math.abs(currentVal - peakVal)
+
+                            if (dist > maxDistanceFromPeak) {
+                                maxDistanceFromPeak = dist
+                            } else if (dist < maxDistanceFromPeak - REVERSAL_THRESHOLD) {
+                                // DETECÇÃO: Chegou na posição inicial! Início da 2ª Repetição.
+                                exerciseState = ExerciseState.TRACKING
+                                val returnEndTime = System.currentTimeMillis()
+
+                                // Define o ritmo do jogo com o dobro do tempo do retorno
+                                waveDurationMillis = ((returnEndTime - returnStartTime) * 2).toInt().coerceIn(1000, 10000)
+
+                                repCount = 1 // Conta a primeira e inicia a segunda
+                                isTracking = true
+                                isAtPeak = false
+
+                                val axisNames = arrayOf("Roll", "Pitch", "Yaw")
+                                dominantAxisName = "Eixo: ${axisNames[activeIdx]} | Ritmo: ${waveDurationMillis / 1000.0}s"
+                            }
+                        }
+                        ExerciseState.TRACKING -> {
+                            val minVal = minAngles[activeIdx]
+                            val maxVal = maxAngles[activeIdx]
+
+                            if (maxVal - minVal > 0.1f) {
+                                var rawNorm = (currentVal - minVal) / (maxVal - minVal)
+                                if (isInverted) rawNorm = 1.0f - rawNorm
+                                normalizedPosition = max(0.0f, kotlin.math.min(1.0f, rawNorm))
+
+                                // Contador contínuo de repetições (Passou de 80% do topo e voltou para 20% da base)
+                                if (normalizedPosition > 0.80f) isAtPeak = true
+                                if (isAtPeak && normalizedPosition < 0.20f) {
+                                    repCount++
+                                    isAtPeak = false
+                                }
+                            }
+                        }
+                        else -> {}
                     }
                 }
             } catch (e: Exception) { }
