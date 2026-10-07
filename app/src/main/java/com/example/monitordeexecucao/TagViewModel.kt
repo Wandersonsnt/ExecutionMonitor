@@ -3,12 +3,13 @@ package com.example.monitordeexecucao // Mantenha o seu pacote!
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.lifecycle.ViewModel
 import kotlin.math.max
-import androidx.compose.runtime.mutableStateListOf
 
 data class BleDevice(val name: String, val address: String)
 
+enum class DotStatus { IDLE, HIT, MISSED }
 enum class ExerciseState {
     IDLE, ADVANCING_REP1, RETURNING_REP1, TRACKING
 }
@@ -16,8 +17,6 @@ enum class ExerciseState {
 class TagViewModel : ViewModel() {
     var isConnected by mutableStateOf(false)
     var exerciseState by mutableStateOf(ExerciseState.IDLE)
-    var showDeviceDialog by mutableStateOf(false)
-    val scannedDevices = mutableStateListOf<BleDevice>()
 
     // Controla a exibição da onda e da bolinha
     var isTracking by mutableStateOf(false)
@@ -25,7 +24,11 @@ class TagViewModel : ViewModel() {
 
     var normalizedPosition by mutableStateOf(0.0f)
     var dominantAxisName by mutableStateOf("Aguardando início...")
+
+    // Contadores de Gamificação
     var repCount by mutableStateOf(0)
+    var pontuacao by mutableStateOf(0)
+    val dotStates = mutableStateMapOf<Int, DotStatus>()
 
     private var minAngles = floatArrayOf(1000f, 1000f, 1000f)
     private var maxAngles = floatArrayOf(-1000f, -1000f, -1000f)
@@ -45,13 +48,6 @@ class TagViewModel : ViewModel() {
     // Histerese: 8 graus de recuo confirmam que o usuário mudou a direção do peso
     private val REVERSAL_THRESHOLD = 8.0f
 
-    fun addScannedDevice(name: String, address: String) {
-        // Evita duplicatas na lista caso o celular escaneie a mesma placa várias vezes
-        if (scannedDevices.none { it.address == address }) {
-            scannedDevices.add(BleDevice(name, address))
-        }
-    }
-
     fun toggleExercise() {
         if (exerciseState == ExerciseState.IDLE) {
             // INÍCIO DO TREINO (Calibração Oculta)
@@ -64,7 +60,12 @@ class TagViewModel : ViewModel() {
             activeAxisIndex = null
             normalizedPosition = 0.0f
             isTracking = false
+
+            // Zera os contadores e limpa as bolinhas coletadas do treino anterior
             repCount = 0
+            pontuacao = 0
+            dotStates.clear()
+
             isAtPeak = false
             dominantAxisName = "Faça a 1ª repetição (Avanço)..."
         } else {
@@ -72,6 +73,16 @@ class TagViewModel : ViewModel() {
             exerciseState = ExerciseState.IDLE
             isTracking = false
             dominantAxisName = "Treino Finalizado. Repetições: $repCount"
+        }
+    }
+
+    // NOVAS VARIÁVEIS DO MENU BLUETOOTH
+    var showDeviceDialog by mutableStateOf(false)
+    val scannedDevices = androidx.compose.runtime.mutableStateListOf<BleDevice>()
+
+    fun addScannedDevice(name: String, address: String) {
+        if (scannedDevices.none { it.address == address }) {
+            scannedDevices.add(BleDevice(name, address))
         }
     }
 
